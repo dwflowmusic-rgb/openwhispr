@@ -1870,6 +1870,7 @@ declare global {
           allowClipboardFallback?: boolean;
           /** Paste exactly this text: no smart spacing, no AutoLearn. */
           raw?: boolean;
+          pressEnter?: boolean;
         }
       ) => Promise<
         | {

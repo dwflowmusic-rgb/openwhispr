@@ -1254,6 +1254,8 @@ export default function SettingsPage({
     setShowTranscriptionPreview,
     autoPasteEnabled,
     setAutoPasteEnabled,
+    autoEnterEnabled,
+    setAutoEnterEnabled,
     keepTranscriptionInClipboard,
     setKeepTranscriptionInClipboard,
     floatingIconAutoHide,
@@ -2826,6 +2828,23 @@ export default function SettingsPage({
                     description={t("settingsPage.general.clipboard.autoPasteDescription")}
                   >
                     <Toggle checked={autoPasteEnabled} onChange={setAutoPasteEnabled} />
+                  </SettingsRow>
+                </SettingsPanelRow>
+                <SettingsPanelRow>
+                  <SettingsRow
+                    label={t("settingsPage.general.clipboard.autoEnter", {
+                      defaultValue: "Press Enter after pasting",
+                    })}
+                    description={t("settingsPage.general.clipboard.autoEnterDescription", {
+                      defaultValue:
+                        "Automatically press Enter once the transcription is pasted to send messages or submit commands",
+                    })}
+                  >
+                    <Toggle
+                      checked={autoEnterEnabled}
+                      onChange={setAutoEnterEnabled}
+                      disabled={!autoPasteEnabled}
+                    />
                   </SettingsRow>
                 </SettingsPanelRow>
                 <SettingsPanelRow>

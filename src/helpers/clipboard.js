@@ -437,6 +437,33 @@ class ClipboardManager {
     );
   }
 
+  resolveWindowsPressEnterBinary() {
+    return this._resolveNativeBinary(
+      "windows-press-enter.exe",
+      "win32",
+      "winPressEnterChecked",
+      "winPressEnterPath"
+    );
+  }
+
+  _windowsFastPasteSupportsEnter(fastPastePath) {
+    if (!fastPastePath) return false;
+    if (this.winFastPasteEnterChecked) return this.winFastPasteEnterSupported;
+    this.winFastPasteEnterChecked = true;
+    try {
+      const result = spawnSync(fastPastePath, ["--capabilities"], {
+        timeout: 700,
+        windowsHide: true,
+      });
+      this.winFastPasteEnterSupported =
+        result.status === 0 &&
+        /\benter-key-v1\b/.test(result.stdout?.toString() ?? "");
+    } catch {
+      this.winFastPasteEnterSupported = false;
+    }
+    return this.winFastPasteEnterSupported;
+  }
+
   resolveLinuxFastPasteBinary() {
     return this._resolveNativeBinary(
       "linux-fast-paste",
@@ -1032,9 +1059,140 @@ class ClipboardManager {
 
   async pasteText(text, options = {}) {
     return this._runClipboardOperation(
-      () => this._pasteText(text, options),
+      async () => {
+        const result = await this._pasteText(text, options);
+        if (options.pressEnter === true && result?.pasted !== false) {
+          await this.pressEnterAfterPaste({
+            pasteMethod: result?.method,
+            targetWindow: options.targetWindow,
+          });
+        }
+        return result;
+      },
       (result) => result?.restoreComplete
     );
+  }
+
+  _runEnterCommand(command, args, timeoutMs = 2000) {
+    return new Promise((resolve) => {
+      let settled = false;
+      const proc = spawn(command, args, {
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true,
+      });
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        killProcess(proc, "SIGKILL");
+        resolve(false);
+      }, timeoutMs);
+      proc.on("close", (code) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(code === 0);
+      });
+      proc.on("error", () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(false);
+      });
+    });
+  }
+
+  _enterCandidates({ pasteMethod, targetWindow } = {}) {
+    if (process.platform === "darwin") {
+      return [
+        {
+          cmd: "osascript",
+          args: ["-e", 'tell application "System Events" to key code 36'],
+          timeoutMs: 2000,
+        },
+      ];
+    }
+
+    if (process.platform === "win32") {
+      const candidates = [];
+      const pressEnterBin = this.resolveWindowsPressEnterBinary();
+      const homeFallback = path.join(
+        os.homedir(),
+        ".openwhispr",
+        "auto-enter-patch",
+        "bin",
+        "windows-press-enter.exe"
+      );
+      if (pressEnterBin) {
+        candidates.push({ cmd: pressEnterBin, args: [], timeoutMs: 2000 });
+      } else if (fs.existsSync(homeFallback)) {
+        candidates.push({ cmd: homeFallback, args: [], timeoutMs: 2000 });
+      }
+
+      const fastPasteBin = this.resolveWindowsFastPasteBinary();
+      if (fastPasteBin && this._windowsFastPasteSupportsEnter(fastPasteBin)) {
+        const args = [
+          ...(targetWindow != null ? ["--restore-window", String(targetWindow)] : []),
+          "--press-enter",
+        ];
+        candidates.push({ cmd: fastPasteBin, args, timeoutMs: 2000 });
+      }
+
+      candidates.push({
+        cmd: "powershell.exe",
+        args: [
+          "-NoProfile",
+          "-NonInteractive",
+          "-WindowStyle",
+          "Hidden",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-Command",
+          "[void][System.Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms');[System.Windows.Forms.SendKeys]::SendWait('{ENTER}')",
+        ],
+        timeoutMs: 4000,
+      });
+      return candidates;
+    }
+
+    const { isWayland, xwaylandAvailable, isWlroots, isCosmic } = getLinuxSessionInfo();
+    const tools = {
+      wtype:
+        isWayland && (isWlroots || isCosmic) && this.commandExists("wtype")
+          ? { cmd: "wtype", args: ["-k", "Return"], timeoutMs: 2000 }
+          : null,
+      ydotool:
+        this.commandExists("ydotool") && this._isYdotoolDaemonRunning()
+          ? {
+              cmd: "ydotool",
+              args: this._isYdotoolLegacy() ? ["key", "Enter"] : ["key", "28:1", "28:0"],
+              timeoutMs: 2000,
+            }
+          : null,
+      xdotool:
+        (!isWayland || xwaylandAvailable) && this.commandExists("xdotool")
+          ? { cmd: "xdotool", args: ["key", "Return"], timeoutMs: 2000 }
+          : null,
+    };
+    const order = !isWayland ? ["xdotool", "ydotool"] : ["wtype", "ydotool", "xdotool"];
+    if (tools[pasteMethod]) {
+      order.splice(order.indexOf(pasteMethod), 1);
+      order.unshift(pasteMethod);
+    }
+    return order.map((name) => tools[name]).filter(Boolean);
+  }
+
+  async pressEnterAfterPaste({ pasteMethod, targetWindow } = {}) {
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    const candidates = this._enterCandidates({ pasteMethod, targetWindow });
+    for (const { cmd, args, timeoutMs } of candidates) {
+      const ok = await this._runEnterCommand(cmd, args, timeoutMs);
+      if (ok) {
+        this.safeLog("⏎ Auto-Enter pressed", { tool: cmd });
+        return true;
+      }
+      debugLogger.warn("Auto-Enter candidate failed", { tool: cmd }, "clipboard");
+    }
+    return false;
   }
 
   async runClipboardOperation(operation) {

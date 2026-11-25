@@ -5146,7 +5146,8 @@ class IPCHandlers {
       // space self-corrects the gap. Reading the char before the cursor to space
       // the front instead would take a macOS Accessibility read costing hundreds
       // of ms — too slow for the paste hot path.
-      const textToPaste = raw === true ? text : applySmartSpacing(text);
+      const textToPaste =
+        raw === true || pasteOptions?.pressEnter === true ? text : applySmartSpacing(text);
 
       // Windows: restore the foreground window captured at record start so the
       // paste lands in the field the user was dictating into, not wherever focus

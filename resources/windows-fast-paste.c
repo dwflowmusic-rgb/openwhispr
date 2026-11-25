@@ -270,11 +270,22 @@ static int SendMediaPlayPause(void) {
     return (SendInput(2, inputs, sizeof(INPUT)) == 2) ? 0 : 1;
 }
 
+static int SendPressEnter(void) {
+    INPUT inputs[2];
+    ZeroMemory(inputs, sizeof(inputs));
+
+    SetKey(&inputs[0], VK_RETURN, 0);
+    SetKey(&inputs[1], VK_RETURN, KEYEVENTF_KEYUP);
+
+    return (SendInput(2, inputs, sizeof(INPUT)) == 2) ? 0 : 1;
+}
+
 int main(int argc, char* argv[]) {
     BOOL detectOnly = FALSE;
     BOOL copyMode = FALSE;
     BOOL capabilitiesOnly = FALSE;
     BOOL mediaPlayPause = FALSE;
+    BOOL pressEnterOnly = FALSE;
     HWND restoreWindow = NULL;
 
     for (int i = 1; i < argc; i++) {
@@ -286,6 +297,8 @@ int main(int argc, char* argv[]) {
             capabilitiesOnly = TRUE;
         } else if (strcmp(argv[i], "--media-play-pause") == 0) {
             mediaPlayPause = TRUE;
+        } else if (strcmp(argv[i], "--press-enter") == 0) {
+            pressEnterOnly = TRUE;
         } else if (strcmp(argv[i], "--restore-window") == 0 && i + 1 < argc) {
             /* Base 16: the handle comes back exactly as --detect-only printed
                it with "TARGET %p" (hex, with or without an 0x prefix). */
@@ -294,7 +307,7 @@ int main(int argc, char* argv[]) {
     }
 
     if (capabilitiesOnly) {
-        printf("paste-v1 selection-copy-v1 target-identity-v1 focus-restore-v1 media-key-v1\n");
+        printf("paste-v1 selection-copy-v1 target-identity-v1 focus-restore-v1 media-key-v1 enter-key-v1\n");
         return 0;
     }
 
@@ -303,6 +316,26 @@ int main(int argc, char* argv[]) {
             fprintf(stderr, "ERROR: SendInput failed (error %lu)\n", GetLastError());
             return 1;
         }
+        return 0;
+    }
+
+    if (pressEnterOnly) {
+        if (restoreWindow && GetForegroundWindow() != restoreWindow &&
+            RestoreForegroundWindow(restoreWindow)) {
+            Sleep(20);
+        }
+        INPUT releasedInputs[NUM_MODIFIERS];
+        WORD  releasedVKs[NUM_MODIFIERS];
+        ZeroMemory(releasedInputs, sizeof(releasedInputs));
+        int releasedCount = ReleaseModifiers(releasedInputs, releasedVKs);
+        int enterResult = SendPressEnter();
+        RestoreModifiers(releasedVKs, releasedCount);
+        if (enterResult != 0) {
+            fprintf(stderr, "ERROR: SendInput failed (error %lu)\n", GetLastError());
+            return 1;
+        }
+        printf("ENTER_OK\n");
+        fflush(stdout);
         return 0;
     }
 
