@@ -140,17 +140,69 @@ def stop_openwhispr() -> bool:
     return True
 
 
+def get_thread_desktop_name() -> str:
+    try:
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+        hd = user32.GetThreadDesktop(kernel32.GetCurrentThreadId())
+        if not hd:
+            return ""
+        buf = ctypes.create_unicode_buffer(256)
+        needed = ctypes.c_uint32()
+        if user32.GetUserObjectInformationW(hd, 2, buf, ctypes.sizeof(buf), ctypes.byref(needed)):
+            return buf.value
+    except Exception:
+        pass
+    return ""
+
+
 def start_openwhispr_non_elevated() -> None:
     if not OPENWHISPR_EXE.exists():
         return
-    # explorer.exe sempre inicia o processo filho no token de usuario comum do desktop.
-    subprocess.Popen(
-        ["explorer.exe", str(OPENWHISPR_EXE)],
-        creationflags=subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+    desktop = get_thread_desktop_name()
+    if desktop.lower() == "default":
+        # explorer.exe sempre inicia o processo filho no token de usuario comum do desktop Default.
+        subprocess.Popen(
+            ["explorer.exe", str(OPENWHISPR_EXE)],
+            creationflags=subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        log("OpenWhispr.exe iniciado via explorer.exe (desktop Default).")
+        return
+
+    # Quando chamado de um desktop isolado/oculto (ex.: exebox-*), delega ao
+    # Agendador de Tarefas (svchost Schedule) para abrir em WinSta0\Default.
+    task_name = "OpenWhispr-Relaunch-Interactive"
+    ps_script = (
+        "$ErrorActionPreference = 'Stop'; "
+        f"$t = '{task_name}'; "
+        f"$a = New-ScheduledTaskAction -Execute '{OPENWHISPR_EXE}'; "
+        "$p = New-ScheduledTaskPrincipal -UserId \"$env:USERDOMAIN\\$env:USERNAME\" "
+        "-LogonType Interactive -RunLevel Limited; "
+        "Register-ScheduledTask -TaskName $t -Action $a -Principal $p -Force | Out-Null; "
+        "try { Start-ScheduledTask -TaskName $t; Start-Sleep -Seconds 2 } "
+        "finally { Unregister-ScheduledTask -TaskName $t -Confirm:$false -ErrorAction SilentlyContinue }"
     )
-    log("OpenWhispr.exe iniciado via explorer.exe (token de usuario).")
+    res = subprocess.run(
+        [
+            "powershell.exe",
+            "-NoProfile",
+            "-NonInteractive",
+            "-WindowStyle",
+            "Hidden",
+            "-Command",
+            ps_script,
+        ],
+        creationflags=subprocess.CREATE_NO_WINDOW,
+        capture_output=True,
+        text=True,
+    )
+    if res.returncode != 0:
+        raise RuntimeError(
+            f"Falha ao iniciar OpenWhispr no desktop Default (desktop={desktop!r}): {res.stderr.strip()}"
+        )
+    log(f"OpenWhispr.exe iniciado no desktop Default via Schedule (origem={desktop or 'unknown'}).")
 
 
 def ensure_acl_and_bin() -> None:
